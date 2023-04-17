@@ -1,0 +1,607 @@
+#######
+
+export PATH=/programs/salmon-1.2.1/bin:$PATH
+for i in $(ls ./SRR*  | sed s/_[12].fastq.gz// | sort -u); do salmon quant -i /workdir/Manu/Homo_Genome/Genome/bed_files/Alevin/Genes_TEindex  -l A -1 ${i}_1.fastq.gz -2 ${i}_2.fastq.gz -p 8 --validateMappings -o quants/${i}_quant; done
+
+mkdir salmon
+
+for i in quants/*/quant.sf; do  mv "$i" "salmon/$(basename -- "$(dirname -- "$i")").tsv"; done
+
+cd salmon/
+
+R
+file_names <- dir() #where you have your files
+file_names
+data_frame <- do.call(cbind,lapply(file_names,read.delim, header=T))
+
+row.names(data_frame) <- data_frame[,1]
+
+dat <- cbind(data_frame[, c(rep(FALSE,4), TRUE)])
+
+dat <- round(dat)
+
+All_joined_countMatrixRemaining <- dat[(-grep("^TE-",rownames(dat))),]
+
+All_joined_countMatrixRemaining$Tosum <- (sapply(strsplit(rownames(All_joined_countMatrixRemaining),"_ENS"),"[[",1))
+
+All_joined_countMatrixRemaining$Tosum <- gsub("\\..*", "", All_joined_countMatrixRemaining$Tosum)
+
+library(data.table)
+
+chalBeV1 <- data.table(All_joined_countMatrixRemaining)
+
+chalBeV1_sum <- chalBeV1[,lapply(.SD,sum),by=Tosum, .SDcols=(colnames(chalBeV1)[-(which(colnames(chalBeV1)=="Tosum"))])]
+
+rownames(chalBeV1_sum) <- (unlist(chalBeV1_sum[,1]))
+
+chalBeV1_sumMatrix <- as.matrix(chalBeV1_sum[,-1])
+
+rownames(chalBeV1_sumMatrix) <- (unlist(chalBeV1_sum[,1]))
+
+head(chalBeV1_sumMatrix)
+
+genes <- chalBeV1_sumMatrix
+
+######## TE
+chalBe <- dat[(grep("^TE-",rownames(dat))),]
+TosumV1 <- gsub("-.*","", gsub("_DUP.*", "", (sapply(strsplit(rownames(chalBe),"TE-"),"[[",2))))
+
+chalBe$Tosum <- TosumV1
+
+chalBeV2 <- data.table(chalBe)
+
+chalBeV2_sum <- chalBeV2[,lapply(.SD,sum),by=Tosum, .SDcols=(colnames(chalBeV2)[-(which(colnames(chalBeV2)=="Tosum"))])]
+
+rownames(chalBeV2_sum) <- (unlist(chalBeV2_sum[,1]))
+
+chalBeV2_sumMatrix <- as.matrix(chalBeV2_sum[,-1])
+
+
+rownames(chalBeV2_sumMatrix) <- (unlist(chalBeV2_sum[,1]))
+
+
+TE_fam <- chalBeV2_sumMatrix
+counts_fam <- (rbind(genes,TE_fam))
+
+countData <- as.data.frame(counts_fam)
+
+
+
+############## Now we have countData which has genes and TE both
+
+library(Seurat)
+library(reshape)
+library(ggplot2)
+library(cowplot)
+library(reticulate)
+library(dplyr)
+library(data.table)
+
+library(scater) # load the library
+library(scran) 
+
+
+pbmc.sce <- as.SingleCellExperiment(pbmc)
+sce <- normalize(pbmc.sce)
+row.names(check) <- row.names(sce)
+
+check <- as.data.frame(sce@assays$data$logcounts)
+
+row.names(check) <- row.names(sce)
+znf <- check[grep("^ZNF|^ZFP", row.names(check)),]
+
+rms <- check[grep("-CHR", row.names(check)),]
+
+rms <- rms[apply(rms, 1, function(row){any(row>2)}),]
+
+znf <- znf[apply(znf, 1, function(row){any(row>2)}),]
+
+colnames(rms) <- colnames(sce)
+colnames(znf) <- colnames(sce)
+
+data <- rbind(znf, rms)
+
+######### The code using the DESEq2 normalization and then extracting the normalized data will work on this to create the heatmap
+
+
+
+############################  Now we go to the data where we had merged the T-cell, boritz and Jiang's datasets , there also we had used the above scheme to get the genes and TEs simultaneously
+
+dat <- read.delim("all_data_Tcell_LIR_Nat_elite.tsv", row.names=1, stringsAsFactors=F)
+
+###### These datasets were in three batches, so analyzing independently, and later, we remove the batch effect
+
+nat <- dat[,grep("^nat", colnames(dat))]
+
+tcell <- dat[,grep("^tcel", colnames(dat))]
+
+lir <- dat[,grep("^lir_", colnames(dat))]
+
+
+library(Seurat)
+
+pbmc_lir <- CreateSeuratObject(counts = lir, project = "pbmc3k", min.cells = 3, min.features = 200)
+
+pbmc = pbmc_lir
+
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & percent.mt < 5)
+
+
+
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 1e6, margin=1, verbose = TRUE)
+
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 5000)
+
+all.genes <- rownames(pbmc)
+
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+pbmc_lir = pbmc
+
+pbmc_tcell <- CreateSeuratObject(counts = tcell, project = "pbmc3k", min.cells = 3, min.features = 200)
+
+pbmc = pbmc_tcell
+
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & percent.mt < 5)
+
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 1e6, margin=1, verbose = TRUE)
+
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 5000)
+
+all.genes <- rownames(pbmc)
+
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+pbmc_tcell = pbmc
+
+pbmc_nat <- CreateSeuratObject(counts = nat, project = "pbmc3k", min.cells = 3, min.features = 200)
+
+pbmc = pbmc_nat
+
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & percent.mt < 5)
+
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 1e6, margin=1, verbose = TRUE)
+
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 5000)
+
+all.genes <- rownames(pbmc)
+
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+pbmc_nat = pbmc
+
+###### Now we remove the batch effect
+
+
+ifnb.list <- c(pbmc_nat, pbmc_lir, pbmc_tcell)
+
+features <- SelectIntegrationFeatures(object.list = ifnb.list)
+
+immune.anchors <- FindIntegrationAnchors(object.list = ifnb.list, anchor.features = features)
+
+length(features)
+
+features <- SelectIntegrationFeatures(object.list = ifnb.list, nfeatures=200)
+
+immune.anchors <- FindIntegrationAnchors(object.list = ifnb.list, anchor.features = features)
+
+length(features)
+
+pbmc.combined <- merge(pbmc_nat, y = c(pbmc_lir, pbmc_tcell), add.cell.ids = c("Nat","LIR", "Tcell"), project = "PBMC12K")
+
+pbmc.combined
+
+pbmc = pbmc.combined
+
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & percent.mt < 5)
+
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 1e6, margin=1, verbose = TRUE)
+
+
+library(ggplot2)
+library(sctransform)
+
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+
+all.genes <- rownames(pbmc)
+
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+
+
+
+
+k.filter <- min(sapply(pbmc, ncol)) + 1
+
+features <- SelectIntegrationFeatures(object.list = ifnb.list, nfeatures=length(VariableFeatures(pbmc)))
+
+
+###### Here we ranged k.filter to many values from 0 to 100, the most redundant number of cluster was 4between 50 to 100 k.filters, then chose the 70 (it actually didn't matter what we chose between 50 to 100).
+
+immune.anchors <- FindIntegrationAnchors(object.list = ifnb.list, anchor.features = features, k.filter=70)
+
+
+immune.combined <- IntegrateData(anchorset = immune.anchors)
+
+DefaultAssay(immune.combined) <- "integrated"
+
+immune.combined <- ScaleData(immune.combined, verbose = FALSE)
+
+
+immune.combined <- RunPCA(immune.combined, npcs = 10, verbose = FALSE)
+
+immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 1:10)
+
+immune.combined <- FindNeighbors(immune.combined, reduction = "pca", dims = 1:10)
+
+immune.combined <- FindClusters(immune.combined, resolution = 0.9)
+
+
+
+cluster1cells <- WhichCells(immune.combined, idents=1)
+cluster2cells <- WhichCells(immune.combined, idents=2)
+cluster3cells <- WhichCells(immune.combined, idents=3)
+cluster4cells <- WhichCells(immune.combined, idents=4)
+cluster5cells <- WhichCells(immune.combined, idents=5)
+
+
+immune.combined@meta.data$Studies <- gsub("_.*", "", colnames(immune.combined))
+
+Idents(immune.combined) <- immune.combined@meta.data$Studies
+
+DimPlot(immune.combined, reduction = "umap", repel = TRUE, pt.size=5)
+dev.off()
+
+
+
+png("UMAP_Elite_Nature_Cell_paper_studywise.png",  width = 14.7, height = 14.8, units = "cm", res = 300, pointsize = 12)
+DimPlot(immune.combined, reduction = "umap", repel = TRUE, pt.size=5, cols = c("slateblue","brown1"))
+dev.off()
+
+
+Idents(immune.combined) <- immune.combined@meta.data$seurat_clusters
+
+
+png("UMAP_Elite_Nature_Cell_paper_clusterwise.png",  width = 14.7, height = 14.8, units = "cm", res = 300, pointsize = 12)
+DimPlot(immune.combined, reduction = "umap", repel = TRUE, pt.size=5, cols = c("gold","red","royalblue","black"))
+dev.off()
+
+celltypes <- c(rep(c("CM", "EM", "Naive", "TM", "Total"), 14), rep(c("Naive", "CM", "TM", "EM"), 12), "Naive", "EM", "Naive", "CM", "TM", "EM", "Naive", "EM", "Naive", "CM", "TM", "EM", "Naive", "EM", "Naive", "CM", "TM", "EM", "Naive", "EM")
+
+immune.combined@meta.data$celltypes <- celltypes
+
+Idents(immune.combined) <- immune.combined@meta.data$celltypes
+
+png("UMAP_Elite_Nature_Cell_paper_celltypewise.png",  width = 14.7, height = 14.8, units = "cm", res = 300, pointsize = 12)
+DimPlot(immune.combined, reduction = "umap", repel = TRUE, pt.size=5, cols = c("slategray","orange", "forestgreen", "purple","firebrick"))
+dev.off()
+
+
+
+Locations <- c(rep("Jiang_ART", 10), rep("Jiang_Elite", 60), rep("VRC", 4), rep("SCOPE", 32), rep("VRC", 4), rep("SCOPE", 4), rep("LIR_PBMC", 4), "LIR_LN", "LIR_LN",rep("LIR_PBMC", 4), "LIR_LN", "LIR_LN",rep("LIR_PBMC", 4), "LIR_LN", "LIR_LN",rep("LIR_PBMC", 4), "LIR_LN", "LIR_LN")
+immune.combined@meta.data$cellstates <- Locations
+Idents(immune.combined) <- immune.combined@meta.data$cellstates
+
+
+
+png("UMAP_Elite_Nature_Cell_paper_cellstate_location.png",  width = 14.7, height = 14.8, units = "cm", res = 300, pointsize = 12)
+DimPlot(immune.combined, reduction = "umap", repel = TRUE, pt.size=5, cols = c("slategrey","orange", "forestgreen", "purple","firebrick", "turquoise"))
+dev.off()
+
+
+DefaultAssay(immune.combined) <- "RNA"
+
+pbmc = immune.combined
+ifnb.list <- lapply(X = ifnb.list, FUN = SCTransform)
+ifnb.list
+features <- SelectIntegrationFeatures(object.list = ifnb.list, nfeatures = 3000)
+ifnb.list <- PrepSCTIntegration(object.list = ifnb.list, anchor.features = features)
+
+
+mark_ind <- FindAllMarkers(pbmc, logfc.threshold= 0.5,  min.pct = 0.45,  only.pos=T)
+
+library(reshape2)
+library(ggplot2)
+
+library(scales)
+
+
+mygenes <- c("IL10","SOCS1","TECPR1","HCP5", "APOBEC3C","APOBEC3D","GPR35","TP53","BATF","CCR5","CXCR4", "CXCR6","GBP5","GBP2",  "GSDMD","IFITM1","IFITM2","IFITM3")
+png("DotPlot_receptor_restriction_factors_expression_Elite_nature_New.png",  width = 34.7, height = 12.8, units = "cm", res = 600, pointsize = 12)
+DotPlot(pbmc2, features=mygenes, scale.min=0, scale.max=100) + scale_colour_gradient2(low = "black", mid = "purple", high = "red") + RotatedAxis()
+dev.off()
+
+
+mytes <- c("L1HS", "L1PA2", "L1PA3","THE1B", "HERVH", "LTR7","MER41B","LTR12C","LTR5","HERVL40","LTR8A")
+
+png("DotPlot_TE_expression_Elite_nature_cell_New.png",  width = 34.7, height = 12.8, units = "cm", res = 600, pointsize = 12)
+DotPlot(pbmc2, features=mytes, scale.min=0, scale.max=100) + scale_colour_gradient2(low = "black", mid = "purple", high = "red") + RotatedAxis()
+dev.off()
+
+p1 <- FeatureScatter(pbmc2, feature1 = "HERVH", feature2 = "ZNF534", pt.size=3, cols=c(rep(c("gold","red","royalblue","black"), 2)))
+p2 <- FeatureScatter(pbmc2, feature1 = "LTR7", feature2 = "ZNF90", pt.size=3, cols=c(rep(c("gold","red","royalblue","black"), 2)))
+p3 <- FeatureScatter(pbmc2, feature1 = "LTR12D", feature2 = "ZNF212", pt.size=3, cols=c(rep(c("gold","red","royalblue","black"), 2)))
+p4 <- FeatureScatter(pbmc2, feature1 = "LTR12D", feature2 = "ZNF652", pt.size=3, cols=c(rep(c("gold","red","royalblue","black"), 2)))
+
+png("Correlation_LTR12_ZNF212_ZNF652.png",  width = 22.7, height = 20.8, units = "cm", res = 300, pointsize = 12)
+CombinePlots(plots = list(p1, p2, p3, p4), nrow=2)
+dev.off()
+
+p1 <- FeatureScatter(pbmc2, feature1 = "L1HS", feature2 = "ZNF84", pt.size=3, cols=c(rep(c("gold","red","royalblue","black"), 2)))
+p2 <- FeatureScatter(pbmc2, feature1 = "L1PA2", feature2 = "ZNF84", pt.size=3, cols=c(rep(c("gold","red","royalblue","black"), 2)))
+p3 <- FeatureScatter(pbmc2, feature1 = "L1PA3", feature2 = "ZNF84", pt.size=3, cols=c(rep(c("gold","red","royalblue","black"), 2)))
+p4 <- FeatureScatter(pbmc2, feature1 = "L1PA4", feature2 = "ZNF84", pt.size=3, cols=c(rep(c("gold","red","royalblue","black"), 2)))
+
+png("Correlation_L1HS_L1PA2_ZNF84.png",  width = 22.7, height = 20.8, units = "cm", res = 300, pointsize = 12)
+ CombinePlots(plots = list(p1, p2, p3, p4), nrow=2)
+dev.off()
+
+
+
+
+
+
+################################################################################################# down here is all bla bla codes for the datasets we don't use in the paper
+
+
+
+
+pbmc <- CreateSeuratObject(counts = data, project = "pbmc3k", min.cells = 3, min.features = 2000)
+colnames(pbmc)
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 100000)
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 3000)
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+colnames(pbmc)
+pbmc <- JackStraw(pbmc, num.replicate = 100)
+pbmc <- ScoreJackStraw(pbmc, dims = 1:10)
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+pbmc <- FindClusters(pbmc, resolution = 0.8)
+WhichCells(pbmc, cluster==1)
+pbmc@meta.data$cell_types <- gsub("\\..*", "", gsub("_CD4.*", "", colnames(pbmc)))
+pbmc@meta.data$cell_types
+pbmc@meta.data$individuals <- c(rep("ART_1", 5), rep("ART_2", 5), rep("EC_1", 5), rep("EC_2", 5), rep("EC_3", 5), rep("EC_4", 5),rep("EC_5", 5),rep("EC_6", 5),rep("EC_7", 5),rep("EC_8", 5),rep("EC_9", 5),rep("EC_10", 5),rep("EC_11", 5),rep("EC_12", 5))
+pbmc@meta.data$individuals
+Idents(pbmc) <- pbmc@meta.data$individuals
+mark_ind <- FindAllMarkers(pbmc, logfc.threshold= 0.25,  min.pct = 0.25,  only.pos=T)
+
+mark_ind <- FindAllMarkers(pbmc, logfc.threshold= 0.5,  min.pct = 0.45,  only.pos=T)
+
+Idents(pbmc) <- pbmc@meta.data$samples_types
+pbmc@meta.data$samples_types <- gsub("_.*", "", colnames(pbmc))
+
+
+Idents(pbmc) <- pbmc@meta.data$samples_types
+
+mark_samples <- FindAllMarkers(pbmc, logfc.threshold= 0.25,  min.pct = 0.45,  only.pos=T)
+
+pbmc@meta.data$cell_types
+Idents(pbmc) <- pbmc@meta.data$cell_types
+
+mark_cell_types <- FindAllMarkers(pbmc, logfc.threshold= 0.25,  min.pct = 0.45,  only.pos=T)
+
+total_deg <- FindMarkers(pbmc, ident.1 = "EC_Total", ident.2 = "ART_Total", min.cells.group= 2)
+
+naive_deg <- FindMarkers(pbmc, ident.1 = "EC_Naive", ident.2 = "ART_Naive", min.cells.group= 2)
+
+temra_deg <- FindMarkers(pbmc, ident.1 = "EC_TEMRA", ident.2 = "ART_TEMRA", min.cells.group= 2)
+
+cm_deg <- FindMarkers(pbmc, ident.1 = "EC_Central_memory", ident.2 = "ART_Central_memory", min.cells.group= 2)
+
+
+em_deg <- FindMarkers(pbmc, ident.1 = "EC_Effector_memory", ident.2 = "ART_Effector_memory", min.cells.group= 2)
+
+te_naive <- naive_deg[grep("^TE-", row.names(naive_deg)),]
+
+te_cm <- cm_deg[grep("^TE-", row.names(cm_deg)),]
+
+te_em <- em_deg[grep("^TE-", row.names(em_deg)),]
+
+te_total <- total_deg[grep("^TE-", row.names(total_deg)),]
+
+te_temra <- temra_deg[grep("^TE-", row.names(temra_deg)),]
+
+
+pbmc@misc$temra_deg <- temra_deg
+pbmc@misc$naive_deg <- naive_deg
+pbmc@misc$total_deg <- total_deg
+pbmc@misc$em_deg <- em_deg
+pbmc@misc$cm_deg <- cm_deg
+pbmc@misc$te_cm <- te_cm
+pbmc@misc$te_em <- te_em
+pbmc@misc$te_temra <- te_temra
+pbmc@misc$te_total <- te_total
+pbmc@misc$te_naive <- te_naive
+pbmc@misc$mark_ind <- mark_ind
+pbmc@misc$mark_cell_types <- mark_cell_types
+pbmc@misc$mark_samples <- mark_samples
+
+
+write.table(znf_rms, "ZNF_rmsk_fam_Elite_normalized_counts.tsv", row.names=T, col.names=NA,sep="\t", quote=F)
+ls()
+dim(znf_rms)
+znf_rms$ave <- apply(znf_rms, 1, mean)
+head(znf_rms)
+head(znf_rms, n=40)
+tail(znf_rms, n=40)
+colnames(znf_rms)
+znf_rms <- znf_rms[,-71]
+colnames(znf_rms)
+jo <- log2(znf_rms+1)
+jo$ave <- apply(jo, 1, mean)
+jos <- jo-jo$ave
+cor <- cor(jos, method="spearman")
+plot(hclust(as.dist(1-cor(t(cor), method="pearson")), method="complete"))
+dev.off()
+head(cor[1:5,1:5])
+head(jos)
+plot(hclust(as.dist(1-cor(t(jos), method="pearson")), method="complete"))
+dev.off()
+tail(jos)
+colnames(jos)
+jos <- jos[,-71]
+row.names(jos) <- (sapply(strsplit(rownames(jos),"-ENS"),"[[",1))
+row.names(jos) <- make.names((sapply(strsplit(rownames(jos),"-ENS"),"[[",1)), unique=T)
+tail(jos)
+plot(hclust(as.dist(1-cor(t(jos), method="pearson")), method="complete"))
+plot(hclust(as.dist(1-cor(t(jos), method="pearson")), method="complete"), cex=0.2)
+plot(hclust(as.dist(1-cor(t(jos), method="pearson")), method="complete"), cex=0.2, lwd=0.5)
+dev.off()
+plot(hclust(as.dist(1-cor(t(jos), method="pearson")), method="complete"), cex=0.5, lwd=0.8)
+plot(hclust(as.dist(1-cor(t(jos), method="spearman")), method="complete"), cex=0.5, lwd=0.8)
+dev.off()
+dend <- hclust(as.dist(1-cor(t(jos), method="spearman")), method="complete")
+class(jos)
+mat <- as.matrix(jos)
+dend <- hclust(as.dist(1-cor(t(mat), method="spearman")), method="complete")
+dend = color_branches(dend, k = 4)
+           library(ComplexHeatmap)
+library(circlize)
+library(colorspace)
+library(GetoptLong)
+dend = color_branches(dend, k = 4)
+library(cluster)
+dend = color_branches(dend, k = 4)
+library(dendextend)
+install.packages("dendextend")
+library(dendextend)
+dend = color_branches(dend, k = 4)
+dim(mat)
+cor <- cor(t(jos), method="spearman")
+dim(cor)
+head(cor[,1:5])
+mat <- as.matrix(cor)
+plot(hclust(as.dist(1-mat), method="complete"), cex=0.5, lwd=0.8)
+dev.off()
+dend <- hclust(as.dist(1-mat), method="complete")
+dend = color_branches(dend, k = 4)
+colnames(mat)
+chr <- c(rep("Expressed Repeats", 600), rep("Expressed ZNFs", 613))
+600+613
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")),
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, 
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+colnames(mat)
+chr <- c(rep("Expressed Repeats", 600), rep("Expressed ZNFs", 614))
+600+614
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")),
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, 
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+library(seriation)
+install.packages("seriation")
+library(seriation)
+o = seriate(max(mat) - mat, method = "BEA_TSP")
+Heatmap(max(mat) - mat, name = "mat", 
+    row_order = get_order(o, 1), column_order = get_order(o, 2),
+    column_title = "seriation by BEA_TSP method")
+dev.off()
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2),
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, 
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2),
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2), cluster_columns=dend, column_split= 4,  column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, 
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    
+            right_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2),
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE, raster_by_magick = TRUE, raster_magick_filter = 'Triangle',
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs"))))
+)
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2),
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE, raster_by_magick = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    )
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2),
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2),
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    
+            right_annotation = rowAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2), cluster_columns=dend, column_split= 4, 
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    
+            right_annotation = rowAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+dend <- hclust(as.dist(1-mat), method="ward")
+dend <- hclust(as.dist(1-mat), method="ward.D2")
+dend = color_branches(dend, k = 4)
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2), cluster_columns=dend, column_split= 4, 
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    
+            right_annotation = rowAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+png("Correlation_Rmsk_families_ZNF_Elite.png",  width = 42.7, height = 34.8, units = "cm", res = 300, pointsize = 12)
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2), cluster_columns=dend, column_split= 4, 
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    
+            right_annotation = rowAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+png("Correlation_Rmsk_families_ZNF_Elite_WARD.png",  width = 42.7, height = 34.8, units = "cm", res = 300, pointsize = 12)
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2), cluster_columns=dend, column_split= 4, 
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    
+            right_annotation = rowAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+png("Correlation_Rmsk_families_ZNF_Elite_WARD.png",  width = 42.7, height = 34.8, units = "cm", res = 300, pointsize = 12)
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2), cluster_columns=dend, column_split= 4, 
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    
+            right_annotation = rowAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+png("Correlation_Rmsk_families_ZNF_Elite_WARD.png",  width = 42.7, height = 34.8, units = "cm", res = 300, pointsize = 12)
+Heatmap(mat, name = "Spearmans rho coeficient", col = colorRamp2(c(-1,0, 1), c("midnightblue","white", "darkred")), row_order = get_order(o, 1), column_order = get_order(o, 2), cluster_columns=dend, column_split= 4, 
+             column_names_gp = gpar(fontsize = 0.5), row_names_gp = gpar(fontsize = 0.0000001), cluster_rows = dend, row_split = 4, use_raster = TRUE,
+             top_annotation = HeatmapAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))),
+                    
+            right_annotation = rowAnnotation(fa3 = chr,
+                    annotation_legend_param = list(fa3 = list(at = c("Expressed Repeats","Expressed ZNFs")))))
+dev.off()
+savehistory()
+savehistory("ZNF_rms_corr_data.Rhistory")
+
