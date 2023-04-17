@@ -1,0 +1,25 @@
+########################## This starts with where clustering ends. The integrated dataset was further investigated for the selected genes and TEs expression profiles in individual clusters
+
+
+mark_ind <- FindAllMarkers(Elite_dataset, logfc.threshold= 0.5,  min.pct = 0.45,  only.pos=T)
+
+
+
+######################### Finally, it is DotPlot , which shows the abundance and intensity of gene, TE expression in each clusters
+library(reshape2)
+library(ggplot2)
+
+library(scales)
+
+
+mygenes <- c("IL10","SOCS1","TECPR1","HCP5", "APOBEC3C","APOBEC3D","GPR35","TP53","BATF","CCR5","CXCR4", "CXCR6","GBP5","GBP2",  "GSDMD","IFITM1","IFITM2","IFITM3")
+png("DotPlot_receptor_restriction_factors_expression_Elite_nature_New.png",  width = 34.7, height = 12.8, units = "cm", res = 600, pointsize = 12)
+DotPlot(Elite_dataset2, features=mygenes, scale.min=0, scale.max=100) + scale_colour_gradient2(low = "black", mid = "purple", high = "red") + RotatedAxis()
+dev.off()
+
+
+mytes <- c("L1HS", "L1PA2", "L1PA3","THE1B", "HERVH", "LTR7","MER41B","LTR12C","LTR5","HERVL40","LTR8A")
+
+png("DotPlot_TE_expression_Elite_nature_cell_New.png",  width = 34.7, height = 12.8, units = "cm", res = 600, pointsize = 12)
+DotPlot(Elite_dataset2, features=mytes, scale.min=0, scale.max=100) + scale_colour_gradient2(low = "black", mid = "purple", high = "red") + RotatedAxis()
+dev.off()
