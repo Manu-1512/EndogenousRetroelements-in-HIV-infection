@@ -1,0 +1,75 @@
+#Manu Singh 5 April 2020
+#Run regionR to get sinificant values for family. The idea is to check if the peaks are enriched in a family.
+
+### Showing the example from EGR1 ChIP-seq data
+
+mkdir EGR1_ChIP_enrichement
+set.seed(786)
+setwd("/your_path/EGR1_ChIP_enrichement/")
+
+
+#.libPaths( c( "/home/manu/Rlib/", .libPaths()) )
+
+
+BiocManager::install("regioneR")
+BiocManager::install("BSgenome.Hsapiens.UCSC.hg19") ### modify it with hg38
+
+library("regioneR")
+
+
+Human_class2_TEs <- read.delim("Human_class2_TE.bed", stringsAsFactors = F, header=F) ### fourth coloumn here should have TE family name
+#### I will prepare it and send ya 
+
+# make sure fourth coloumn is TE name
+
+All_Peaks <- read.delim("All_other_EGR1_peaks.bed", stringsAsFactors = F, header=F) ## this file should only have three coloumns, chr, start, end in a bed format
+
+All_Peaks_GR <- toGRanges(All_Peaks)
+
+
+human.genome <- getGenomeAndMask("hg19", mask=NA)$genome # hg38 instead of hg19
+
+human.chrs <- filterChromosomes(human.genome, keep.chr=unlist(unique(All_Peaks[,1])))
+  
+  
+  
+  Total_TEs_family <- (unique(Human_class2_TEs$V4))
+  Total_TEs_familyDF <- as.data.frame(Total_TEs_family)
+  Total_TEs_familyDF$Pvalue <- 1
+  
+  Save_Model_Also <- list()
+  for(numfam in 1:length(Total_TEs_family)){
+    
+    cat("Family Number", numfam, Total_TEs_family[numfam],"\n")
+    Take_one_family <- Human_class2_TEs[(Human_class2_TEs$V4%in%Total_TEs_family[numfam]),]
+    
+    Take_one_familyV2 <- Take_one_family[(((Take_one_family[,1]))%in%unlist(unique(All_Peaks[,1]))),]
+    
+    
+    Take_one_familyV2_GR <- toGRanges(Take_one_familyV2)
+    
+    
+    Human_class2_TEsV2 <- Human_class2_TEs[(((Human_class2_TEs[,1]))%in%unlist(unique(All_Peaks[,1]))),]
+    Human_class2_TEs_GR <- toGRanges(Human_class2_TEsV2)
+    
+    
+    #numOverlaps(Take_one_familyV2_GR, All_Peaks_GR)
+    
+    #random.RS <- resampleRegions(Take_one_familyV2_GR, universe=Human_class2_TEs_GR)
+    
+    
+     pt <- permTest(A=Take_one_familyV2_GR, ntimes=1000, randomize.function=randomizeRegions, genome=human.chrs,
+                   evaluate.function=numOverlaps, B=All_Peaks_GR, verbose=FALSE, alternative = "greater", force.parallel = TRUE)
+    Total_TEs_familyDF[numfam,2] <- pt$numOverlaps$pval
+    Save_Model_Also[[numfam]] <- pt
+    
+  }
+  
+  
+  
+  Total_TEs_familyDF$FDRPvalue <- p.adjust(Total_TEs_familyDF$Pvalue,method="fdr")
+  write.table(Total_TEs_familyDF, "Total_TEs_family_enrichment_EGR1.tsv", row.names=TRUE, col.names=NA, sep="\t", quote=F, dec=".")
+  
+  saveRDS(Total_TEs_familyDF,file="Total_TEs_familyDF_TakingGenomehg19ForRandomization.rds")
+  saveRDS(Save_Model_Also,file="Save_Model_Also_TakingGenomehg19ForRandomization.rds")
+  
