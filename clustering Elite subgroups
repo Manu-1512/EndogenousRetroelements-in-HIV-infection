@@ -1,0 +1,213 @@
+
+############## Now we have countData which has genes and TE both
+
+library(Seurat)
+library(reshape)
+library(ggplot2)
+library(cowplot)
+library(reticulate)
+library(dplyr)
+library(data.table)
+
+
+############################  Now we go to the data where we had merged the  boritz and Jiang's datasets , there also we had used the above scheme to get the genes and TEs simultaneously
+
+dat <- read.delim("all_data_Tcell_LIR_Nat_elite.tsv", row.names=1, stringsAsFactors=F)
+
+###### These datasets were in three batches, so analyzing independently, and later, we remove the batch effect
+
+nat <- dat[,grep("^nat", colnames(dat))]
+
+tcell <- dat[,grep("^tcel", colnames(dat))]
+
+lir <- dat[,grep("^lir_", colnames(dat))]
+
+
+library(Seurat)
+
+Elite_dataset_lir <- CreateSeuratObject(counts = lir, project = "Elite_dataset3k", min.cells = 3, min.features = 200)
+
+Elite_dataset = Elite_dataset_lir
+
+Elite_dataset[["percent.mt"]] <- PercentageFeatureSet(Elite_dataset, pattern = "^MT-")
+
+Elite_dataset <- subset(Elite_dataset, subset = nFeature_RNA > 200 & percent.mt < 5)
+
+
+
+Elite_dataset <- NormalizeData(Elite_dataset, normalization.method = "LogNormalize", scale.factor = 1e6, margin=1, verbose = TRUE)
+
+Elite_dataset <- FindVariableFeatures(Elite_dataset, selection.method = "vst", nfeatures = 5000)
+
+all.genes <- rownames(Elite_dataset)
+
+Elite_dataset <- ScaleData(Elite_dataset, features = all.genes)
+
+Elite_dataset_lir = Elite_dataset
+
+Elite_dataset_tcell <- CreateSeuratObject(counts = tcell, project = "Elite_dataset3k", min.cells = 3, min.features = 200)
+
+Elite_dataset = Elite_dataset_tcell
+
+Elite_dataset[["percent.mt"]] <- PercentageFeatureSet(Elite_dataset, pattern = "^MT-")
+
+Elite_dataset <- subset(Elite_dataset, subset = nFeature_RNA > 200 & percent.mt < 5)
+
+Elite_dataset <- NormalizeData(Elite_dataset, normalization.method = "LogNormalize", scale.factor = 1e6, margin=1, verbose = TRUE)
+
+Elite_dataset <- FindVariableFeatures(Elite_dataset, selection.method = "vst", nfeatures = 5000)
+
+all.genes <- rownames(Elite_dataset)
+
+Elite_dataset <- ScaleData(Elite_dataset, features = all.genes)
+
+Elite_dataset_tcell = Elite_dataset
+
+Elite_dataset_nat <- CreateSeuratObject(counts = nat, project = "Elite_dataset3k", min.cells = 3, min.features = 200)
+
+Elite_dataset = Elite_dataset_nat
+
+Elite_dataset[["percent.mt"]] <- PercentageFeatureSet(Elite_dataset, pattern = "^MT-")
+
+Elite_dataset <- subset(Elite_dataset, subset = nFeature_RNA > 200 & percent.mt < 5)
+
+Elite_dataset <- NormalizeData(Elite_dataset, normalization.method = "LogNormalize", scale.factor = 1e6, margin=1, verbose = TRUE)
+
+Elite_dataset <- FindVariableFeatures(Elite_dataset, selection.method = "vst", nfeatures = 5000)
+
+all.genes <- rownames(Elite_dataset)
+
+Elite_dataset <- ScaleData(Elite_dataset, features = all.genes)
+
+Elite_dataset_nat = Elite_dataset
+
+###### Now we remove the batch effect
+
+
+object_for_batch_removal.list <- c(Elite_dataset_nat, Elite_dataset_lir, Elite_dataset_tcell)
+
+features <- SelectIntegrationFeatures(object.list = object_for_batch_removal.list)
+
+batch_removal.anchors <- FindIntegrationAnchors(object.list = object_for_batch_removal.list, anchor.features = features)
+
+length(features)
+
+features <- SelectIntegrationFeatures(object.list = object_for_batch_removal.list, nfeatures=200)
+
+batch_removal.anchors <- FindIntegrationAnchors(object.list = object_for_batch_removal.list, anchor.features = features)
+
+length(features)
+
+Elite_dataset.combined <- merge(Elite_dataset_nat, y = c(Elite_dataset_lir, Elite_dataset_tcell), add.cell.ids = c("Nat","LIR", "Tcell"), project = "Elite_dataset12K")
+
+Elite_dataset.combined
+
+Elite_dataset = Elite_dataset.combined
+
+Elite_dataset[["percent.mt"]] <- PercentageFeatureSet(Elite_dataset, pattern = "^MT-")
+
+Elite_dataset <- subset(Elite_dataset, subset = nFeature_RNA > 200 & percent.mt < 5)
+
+Elite_dataset <- NormalizeData(Elite_dataset, normalization.method = "LogNormalize", scale.factor = 1e6, margin=1, verbose = TRUE)
+
+
+library(ggplot2)
+library(sctransform)
+
+Elite_dataset <- FindVariableFeatures(Elite_dataset, selection.method = "vst", nfeatures = 2000)
+
+all.genes <- rownames(Elite_dataset)
+
+Elite_dataset <- ScaleData(Elite_dataset, features = all.genes)
+
+Elite_dataset <- RunPCA(Elite_dataset, features = VariableFeatures(object = Elite_dataset))
+
+
+
+
+k.filter <- min(sapply(Elite_dataset, ncol)) + 1
+
+features <- SelectIntegrationFeatures(object.list = object_for_batch_removal.list, nfeatures=length(VariableFeatures(Elite_dataset)))
+
+
+###### Here we ranged k.filter to many values from 0 to 100, the most redundant number of cluster was 4between 50 to 100 k.filters, then chose the 70 (it actually didn't matter what we chose between 50 to 100).
+
+batch_removal.anchors <- FindIntegrationAnchors(object.list = object_for_batch_removal.list, anchor.features = features, k.filter=70)
+
+
+batch_removal.combined <- IntegrateData(anchorset = batch_removal.anchors)
+
+DefaultAssay(batch_removal.combined) <- "integrated"
+
+batch_removal.combined <- ScaleData(batch_removal.combined, verbose = FALSE)
+
+
+batch_removal.combined <- RunPCA(batch_removal.combined, npcs = 10, verbose = FALSE)
+
+batch_removal.combined <- RunUMAP(batch_removal.combined, reduction = "pca", dims = 1:10)
+
+batch_removal.combined <- FindNeighbors(batch_removal.combined, reduction = "pca", dims = 1:10)
+
+batch_removal.combined <- FindClusters(batch_removal.combined, resolution = 0.9)
+
+
+
+cluster1cells <- WhichCells(batch_removal.combined, idents=1)
+cluster2cells <- WhichCells(batch_removal.combined, idents=2)
+cluster3cells <- WhichCells(batch_removal.combined, idents=3)
+cluster4cells <- WhichCells(batch_removal.combined, idents=4)
+cluster5cells <- WhichCells(batch_removal.combined, idents=5)
+
+
+batch_removal.combined@meta.data$Studies <- gsub("_.*", "", colnames(batch_removal.combined))
+
+Idents(batch_removal.combined) <- batch_removal.combined@meta.data$Studies
+
+DimPlot(batch_removal.combined, reduction = "umap", repel = TRUE, pt.size=5)
+dev.off()
+
+############################################# This is just to reach to the data, where you have integrated objects, four clusters, now plot it
+
+png("UMAP_Elite_Nature_Cell_paper_studywise.png",  width = 14.7, height = 14.8, units = "cm", res = 300, pointsize = 12)
+DimPlot(batch_removal.combined, reduction = "umap", repel = TRUE, pt.size=5, cols = c("slateblue","brown1"))
+dev.off()
+
+
+Idents(batch_removal.combined) <- batch_removal.combined@meta.data$seurat_clusters
+
+
+png("UMAP_Elite_Nature_Cell_paper_clusterwise.png",  width = 14.7, height = 14.8, units = "cm", res = 300, pointsize = 12)
+DimPlot(batch_removal.combined, reduction = "umap", repel = TRUE, pt.size=5, cols = c("gold","red","royalblue","black"))
+dev.off()
+
+celltypes <- c(rep(c("CM", "EM", "Naive", "TM", "Total"), 14), rep(c("Naive", "CM", "TM", "EM"), 12), "Naive", "EM", "Naive", "CM", "TM", "EM", "Naive", "EM", "Naive", "CM", "TM", "EM", "Naive", "EM", "Naive", "CM", "TM", "EM", "Naive", "EM")
+
+batch_removal.combined@meta.data$celltypes <- celltypes
+
+Idents(batch_removal.combined) <- batch_removal.combined@meta.data$celltypes
+
+png("UMAP_Elite_Nature_Cell_paper_celltypewise.png",  width = 14.7, height = 14.8, units = "cm", res = 300, pointsize = 12)
+DimPlot(batch_removal.combined, reduction = "umap", repel = TRUE, pt.size=5, cols = c("slategray","orange", "forestgreen", "purple","firebrick"))
+dev.off()
+
+
+
+Locations <- c(rep("Jiang_ART", 10), rep("Jiang_Elite", 60), rep("VRC", 4), rep("SCOPE", 32), rep("VRC", 4), rep("SCOPE", 4), rep("LIR_Elite_dataset", 4), "LIR_LN", "LIR_LN",rep("LIR_Elite_dataset", 4), "LIR_LN", "LIR_LN",rep("LIR_Elite_dataset", 4), "LIR_LN", "LIR_LN",rep("LIR_Elite_dataset", 4), "LIR_LN", "LIR_LN")
+batch_removal.combined@meta.data$cellstates <- Locations
+Idents(batch_removal.combined) <- batch_removal.combined@meta.data$cellstates
+
+
+
+png("UMAP_Elite_Nature_Cell_paper_cellstate_location.png",  width = 14.7, height = 14.8, units = "cm", res = 300, pointsize = 12)
+DimPlot(batch_removal.combined, reduction = "umap", repel = TRUE, pt.size=5, cols = c("slategrey","orange", "forestgreen", "purple","firebrick", "turquoise"))
+dev.off()
+
+
+DefaultAssay(batch_removal.combined) <- "RNA"
+
+Elite_dataset = batch_removal.combined
+object_for_batch_removal.list <- lapply(X = object_for_batch_removal.list, FUN = SCTransform)
+object_for_batch_removal.list
+features <- SelectIntegrationFeatures(object.list = object_for_batch_removal.list, nfeatures = 3000)
+object_for_batch_removal.list <- PrepSCTIntegration(object.list = object_for_batch_removal.list, anchor.features = features)
+
